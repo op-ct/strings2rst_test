@@ -1,6 +1,6 @@
 require 'json'
 require 'fileutils'
-require 'terminal-table'
+require 'csv'
 `puppet strings generate --emit-json strings.json`  # TODO: pure-ruby
 
 @module_dir = Dir.pwd
@@ -10,7 +10,10 @@ metadata_json = File.join(@module_dir, 'metadata.json')
 if File.exists?(metadata_json) 
   metadata = JSON.parse File.read(metadata_json)
 else
-  metadata = { 'name' => 'forgeorg-modulename' }
+  metadata = { 
+    'name' => 'forgeorg-modulename',
+    'author' => 'Author Name Goes Here',
+  }
 end
 strings = JSON.parse File.read( 'strings.json' )
 
@@ -20,8 +23,9 @@ strings = JSON.parse File.read( 'strings.json' )
 things = {}
 
 # TODO: refactor into class
-@display_tags=true
 @forge_org = metadata['name'].split(%r(-|/)).first
+@module_name = metadata['name'].split(%r(-|/)).last
+@module_author = metadata['author']
 
 def cross_ref_name( name )
   "pupmod__#{@forge_org}_#{name}"
@@ -37,11 +41,17 @@ FileUtils.rm_rf 'doc'
 # write conf.py
 # This needs to be written each time in order to embed metadata about the
 # proejct into the conf.py
-conf_py_content = DATA.read
-out_path = File.join('doc', 'source', 'conf.py')
+root_doc_source_path = File.join('doc', 'source')
+
+out_path = File.join(root_doc_source_path, 'conf.py')
 FileUtils.mkdir_p File.dirname(out_path)
+conf_py_content = DATA.read
+conf_py_content.gsub('XXX',@module_name)
+conf_py_content.gsub('YYY',@module_author)
 File.open(out_path,'w'){ |f| f.puts conf_py_content }
 
+data_path = File.join(root_doc_source_path, '_data')
+FileUtils.mkdir_p File.dirname(data_path)
 
 # write others
 strings_types = ['puppet_classes','defined_types']
@@ -56,15 +66,14 @@ strings_types.each do |strings_type|
           .sub(%r{^manifests/},'')
           .sub(/\.pp/, '.rst')
     )
-    things[ strings_type ] ||= []
-    things[ strings_type ] << { :ref => cross_ref_name(data['name']), :path => out_path }
     FileUtils.mkdir_p File.dirname(out_path)
 
-
+    things[ strings_type ] ||= []
+    things[ strings_type ] << { :ref => cross_ref_name(data['name']), :path => out_path }
     title = "#{strings_types_map.fetch(strings_type)}: #{data['name']}"
 
     xxx = ''
-    xxx += ".. _#{cross_ref_name(data['name'])}\n\n"
+    xxx += ".. _#{cross_ref_name(data['name'])}:\n\n"
 
     xxx += title + "\n" + '=' * title.size + "\n\n"
     if data.key? 'inherits'
@@ -87,38 +96,41 @@ strings_types.each do |strings_type|
       xxx += "\n\n`NOTE: Further rdoc sections (starting with ``==`` ) were automatically removed`\n\n"
     end
 
+    _csv_parameter_data = []
     # FIXME: this skips parameters without defaults
     subtitle = 'Parameters'
-    xxx += subtitle + "\n" + '-' * subtitle.size + "\n\n"
-    if data.key? 'defaults'
-    table = Terminal::Table.new do |t|
-      t.style = {:all_separators => true}
-      data.fetch('defaults', {}).each do |k,v|
-        tags = data['docstring']['tags'].select{|x| x['name'] == k }.first
+    xxx += "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
 
-          row = ["**#{k}**"]
-          row << tags['types'].join(', ') if @display_tags
-          row << ".. code-block:: Ruby\n\n    #{v}"
-
-          t << row
-          unless tags['text'].empty?
-            t << [{
-                   :value => tags['text'],
-                   :colspan => row.size,
-                 }]
-          end
-        end
-      end
-
+    data['docstring']['tags'].select{|x| x['tag_name'] == 'param' }.each do |tags|
+      row = [tags['name']]
+      row << tags['types'].join(', ')
+      row << ".. code-block:: Ruby\n\n    #{data['defaults'].fetch(tags['name'], nil)}"
+      row <<  tags['text']
+      _csv_parameter_data << row
     end
-    xxx += table.to_s + "\n"
-    xxx += "\n"
 
+    _csv_filename = File.join(data_path,cross_ref_name(data['name']).gsub(':','_'))+'.csv'
+    FileUtils.mkdir_p File.dirname(_csv_filename)
+    File.open(_csv_filename,'w') do |f|
+      _csv_parameter_data.each do |row|
+        f.puts row.to_csv
+      end
+    end
+
+    File.dirname(data['file']).split(File::SEPARATOR).size 
+    _csv_rel_path = "..#{File::SEPARATOR}" * File.dirname(data['file']).split(File::SEPARATOR).size
+    _csv_filename = File.join( _csv_rel_path, '_data', File.basename(_csv_filename) )
+    xxx += ".. csv-table:: Parameters" + "\n"
+    xxx += '  :header: "Parameter","Types","Default","Description"' + "\n"
+    xxx += "  :file:   #{_csv_filename}\n\n"
+    xxx += "\n"
 
     subtitle = 'Source'
     xxx += subtitle + "\n" + '-' * subtitle.size + "\n\n"
     xxx += ".. code-block:: Ruby\n"
+    xxx += "  :linenos:\n"
     xxx += "\n"
+
     # => ["name", "file", "line", "inherits", "docstring", "defaults", "source"]
     xxx += data['source'].gsub(/^/m, '    ')
     xxx += "\n\n"
@@ -129,7 +141,7 @@ strings_types.each do |strings_type|
 end
 
 # write index.rst
-out_path = File.join('doc', 'source', 'index.rst')
+out_path = File.join(root_doc_source_path, 'index.rst')
 FileUtils.mkdir_p File.dirname(out_path)
 xxx = ''
 things.each do |title, _things|
@@ -141,6 +153,18 @@ things.each do |title, _things|
     _thing_link = thing[:path].sub(%r(^#{_path}#{File::SEPARATOR}),'').sub('.rst','')
     xxx += "* :doc:`#{_thing_link}`\n"
   end
+
+  xxx += "\n"
+  xxx += ".. toctree:\n"
+  xxx += "  :maxdepth: 1\n"
+  xxx += "\n"
+  _things.each do |thing|
+    _path = File.join('doc','source')
+##    _thing_link = thing[:path].sub(%r(^#{_path}#{File::SEPARATOR}),'').sub('.rst','')
+##    xxx += "  `#{thing[:ref]}` <#{_thing_link}>\n"
+    xxx += "  `#{thing[:ref]}`\n"
+  end
+  xxx += "\n"
 end
 
 File.open( out_path, 'w' ){|f| f.puts(xxx); puts xxx }
@@ -175,7 +199,6 @@ import os
 #needs_sphinx = '1.0'
 
 # Add any Sphinx extension module names here, as strings. They can be
-# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = []
 
