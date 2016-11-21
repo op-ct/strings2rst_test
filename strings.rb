@@ -5,20 +5,19 @@ require 'csv'
 
 @module_dir = Dir.pwd
 
-
 metadata_json = File.join(@module_dir, 'metadata.json')
 if File.exists?(metadata_json)
   metadata = JSON.parse File.read(metadata_json)
 else
   metadata = {
-    'name' => 'forgeorg-modulename',
+    'name' => 'forge_org-module_name',
     'author' => 'Author Name Goes Here',
   }
 end
 strings = JSON.parse File.read( 'strings.json' )
 
 # => ["puppet_classes", "defined_types", "resource_types", "providers", "puppet_functions"
-# TODO: resource_types
+# TODO: puppet_functions
 
 things = {}
 
@@ -47,10 +46,10 @@ def rst_subtitle(subtitle)
   "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
 end
 
-def rst_csv_table(data, _csv_filename)
+def rst_csv_table(data, _csv_filename, extra_depth=0)
   xxx = ''
   File.dirname(data['file']).split(File::SEPARATOR).size
-  _dir_depth = File.dirname(data['file']).split(File::SEPARATOR).size
+  _dir_depth = File.dirname(data['file']).split(File::SEPARATOR).size-extra_depth
   _csv_rel_path = "..#{File::SEPARATOR}" * _dir_depth
   _csv_filename = File.join( _csv_rel_path, '_data', File.basename(_csv_filename) )
   xxx += ".. csv-table::" + "\n"
@@ -61,7 +60,7 @@ end
 strings_types_map = {
   'puppet_classes' => 'class',
   'defined_types'  => 'defined type',
-  'resource_types'  => 'resource',
+  'resource_types'  => 'resource type',
   'providers'  => 'provider',
   'puppet_functions'  => 'function',
 }
@@ -79,8 +78,8 @@ FileUtils.rm_rf 'doc'
 # proejct into the conf.py
 FileUtils.mkdir_p File.dirname(@conf_py_path)
 conf_py_content = DATA.read
-conf_py_content.gsub('ZZZ',@module_name)
-conf_py_content.gsub('YYY',@module_author)
+conf_py_content.gsub!('ZZZ',@module_name)
+conf_py_content.gsub!('YYY',@module_author)
 File.open(@conf_py_path,'w'){ |f| f.puts conf_py_content }
 
 FileUtils.mkdir_p File.dirname(@static_source_path)
@@ -108,9 +107,14 @@ strings_types_map.keys.each do |strings_type|
     xxx += ".. _#{cross_ref_name(data['name'], strings_type)}:\n\n"
 
     xxx += title + "\n" + '=' * title.size + "\n\n"
+    # TODO: refactor into class
     if data.key? 'inherits'
       target = cross_ref_name(data['inherits'],strings_type)
       xxx += ":Inherits:\n  #{data['inherits']}_\n"
+    end
+    if data.key? 'type_name'
+      target = cross_ref_name(data['type_name'],'resource_types')
+      xxx += ":Type:\n  :ref:`#{target}`\n"
     end
     xxx += ":File:\n  #{data['file']}\n"
     xxx += ":Lines:\n  #{data['line']}\n"
@@ -131,6 +135,7 @@ strings_types_map.keys.each do |strings_type|
     _csv_parameter_data = []
     # FIXME: this skips parameters without defaults
 
+    extra_depth=0
     if ['puppet_classes', 'defined_types'].include? strings_type
       xxx += rst_subtitle('Parameters')
       _csv_parameter_data << ['Parameter','Types','Default','Description']
@@ -141,24 +146,78 @@ strings_types_map.keys.each do |strings_type|
         row <<  tags['text']
         _csv_parameter_data << row
       end
+      _csv_filename = record_csv(data['name'], strings_type, _csv_parameter_data)
+      xxx += rst_csv_table(data, _csv_filename, extra_depth)
     elsif ['resource_types'].include? strings_type
-      _csv_parameter_data << ['Parameter','Types','Default','Description']
+      extra_depth=2
+
+      xxx += rst_subtitle('properties')
+      _csv_parameter_data << ['Name','Values','Default','Description']
       data['properties'].each do |_data|
-        xxx += rst_subtitle('Properties')
-        _csv_parameter_data << ['Name', 'Values', 'Default', 'Description']
         _csv_parameter_data << [
           _data['name'],
-          _data['values'].map{|v| ".. code-block:: Ruby\n\n    #{v}" }.join("\n"),
-          ".. code-block:: Ruby\n\n    #{_data['default']}",
+          _data['values'].map{|v| ".. code-block:: ruby\n\n    #{v}" }.join("\n"),
+          ".. code-block:: ruby\n\n    #{_data['default']}",
           _data['description'],
         ]
       end
+      _csv_filename = record_csv(data['name'], strings_type, _csv_parameter_data)
+      xxx += rst_csv_table(data, _csv_filename, extra_depth)
+
+      xxx += rst_subtitle('parameters')
+      xxx += "`not implemented yet (and probably wouldn't look sensible in table format)`\n"
+      xxx += "\n"
+      xxx += "\n"
+      ###_csv_parameter_data << ['Name', 'Default', 'Description'
+      ###data['parameters'].each do |_data|
+      ###  _default = ''
+      ###  if _d = _data.fetch('default')
+      ###    _default = ".. code-block:: Ruby\n\n    #{_data['defaults'].fetch(tags['name'], nil)}"
+      ###  _csv_parameter_data << [
+      ###    _data['name'],
+      ###    _default,
+      ###    _data['description'],
+      ###  ]
+      ###end
+      ###_csv_filename = record_csv(data['name'], strings_type, _csv_parameter_data)
+      ###xxx += rst_csv_table(data, _csv_filename, extra_depth)
+
+
+      xxx += rst_subtitle('features')
+      xxx += "`not implemented yet`\n"
+      xxx += "\n"
+      xxx += "\n"
+      xxx += rst_subtitle('providers')
+      strings['providers'].select{|x| x['type_name'] == data['name'] }.each do |provider|
+        target = cross_ref_name(provider['name'],'providers')
+        xxx += "* :ref:`#{target}` \n"
+      end
+      xxx += "`not implemented yet`\n"
+      xxx += "\n"
+      xxx += "\n"
+    elsif ['providers'].include? strings_type
+      xxx += rst_subtitle('Confines')
+      data['confines'].each do |k,v|
+        xxx += "\n"
+        xxx += ":#{k}:\n    #{v}\n"
+      end
+
+      xxx += rst_subtitle('Defaults')
+      data['defaults'].each do |k,v|
+        xxx += "\n"
+        xxx += ":#{k}:\n    #{v}\n"
+      end
+      xxx += "\n"
+
+      xxx += rst_subtitle('Commands')
+      data['commands'].each do |k,v|
+        xxx += "- #{k}\n"
+      end
+      xxx += "\n"
     else
-              require 'pry'; binding.pry
+      require 'pry'; binding.pry
     end
 
-    _csv_filename = record_csv(data['name'], strings_type, _csv_parameter_data)
-    xxx += rst_csv_table(data, _csv_filename)
 
     # => ["name", "file", "line", "inherits", "docstring", "defaults", "source"]
     # TODO: should we do anythingspecial if there is no source?
@@ -183,25 +242,17 @@ end
 out_path = File.join(@root_doc_source_path, 'index.rst')
 FileUtils.mkdir_p File.dirname(out_path)
 xxx = ''
+title = "module: #{@forge_org}-#{@module_name}"
+xxx += title + "\n" + '=' * title.size + "\n\n"
 things.each do |title, _things|
-  xxx += title + "\n" + '=' * title.size + "\n\n"
-
-  _things.each do |thing|
-    _path = File.join('doc','source',title)
-    _path = File.join('doc','source')
-    _thing_link = thing[:path].sub(%r(^#{_path}#{File::SEPARATOR}),'').sub('.rst','')
-    xxx += "* :doc:`#{_thing_link}`\n"
-  end
-
+  xxx += rst_subtitle( title.split('_').map{|x| x.capitalize }.join(' ') )
   xxx += "\n"
   xxx += ".. toctree:\n"
-  xxx += "  :maxdepth: 1\n"
+  xxx += "  :maxdepth: 2\n"
   xxx += "\n"
   _things.each do |thing|
     _path = File.join('doc','source')
-##    _thing_link = thing[:path].sub(%r(^#{_path}#{File::SEPARATOR}),'').sub('.rst','')
-##    xxx += "  `#{thing[:ref]}` <#{_thing_link}>\n"
-    xxx += "  `#{thing[:ref]}`\n"
+    xxx += "*  :ref:`#{thing[:ref]}`\n"
   end
   xxx += "\n"
 end
