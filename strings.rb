@@ -43,6 +43,21 @@ def record_csv(name, strings_type, _csv_data)
   _csv_filename
 end
 
+def rst_subtitle(subtitle)
+  "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
+end
+
+def rst_csv_table(data, _csv_filename)
+  xxx = ''
+  File.dirname(data['file']).split(File::SEPARATOR).size
+  _dir_depth = File.dirname(data['file']).split(File::SEPARATOR).size
+  _csv_rel_path = "..#{File::SEPARATOR}" * _dir_depth
+  _csv_filename = File.join( _csv_rel_path, '_data', File.basename(_csv_filename) )
+  xxx += ".. csv-table::" + "\n"
+  xxx += "  :header-rows: 1\n"
+  xxx += "  :file:   #{_csv_filename}\n\n"
+  xxx += "\n"
+end
 strings_types_map = {
   'puppet_classes' => 'class',
   'defined_types'  => 'defined type',
@@ -117,8 +132,7 @@ strings_types_map.keys.each do |strings_type|
     # FIXME: this skips parameters without defaults
 
     if ['puppet_classes', 'defined_types'].include? strings_type
-      subtitle = 'Parameters'
-      xxx += "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
+      xxx += rst_subtitle('Parameters')
       _csv_parameter_data << ['Parameter','Types','Default','Description']
       data['docstring'].fetch('tags',[]).select{|x| x['tag_name'] == 'param' }.each do |tags|
         row = [tags['name']]
@@ -127,43 +141,39 @@ strings_types_map.keys.each do |strings_type|
         row <<  tags['text']
         _csv_parameter_data << row
       end
-###    else
-###      subtitle = 'Properties'
-###      xxx += "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
-###      data['properties'].each do |_data|
-###        row = [_data
-###        row << tags['types'].join(', ')
-###        row << ".. code-block:: Ruby\n\n    #{data['defaults'].fetch(tags['name'], nil)}"
-###        row <<  tags['text']
-###        _csv_parameter_data << row
-###
-###              require 'pry'; binding.pry unless strings_type == 'puppet_classes'
-###      end
+    elsif ['resource_types'].include? strings_type
+      _csv_parameter_data << ['Parameter','Types','Default','Description']
+      data['properties'].each do |_data|
+        xxx += rst_subtitle('Properties')
+        _csv_parameter_data << ['Name', 'Values', 'Default', 'Description']
+        _csv_parameter_data << [
+          _data['name'],
+          _data['values'].map{|v| ".. code-block:: Ruby\n\n    #{v}" }.join("\n"),
+          ".. code-block:: Ruby\n\n    #{_data['default']}",
+          _data['description'],
+        ]
+      end
+    else
+              require 'pry'; binding.pry
     end
 
     _csv_filename = record_csv(data['name'], strings_type, _csv_parameter_data)
-
-    File.dirname(data['file']).split(File::SEPARATOR).size
-    _dir_depth = File.dirname(data['file']).split(File::SEPARATOR).size
-    _csv_rel_path = "..#{File::SEPARATOR}" * _dir_depth
-    _csv_filename = File.join( _csv_rel_path, '_data', File.basename(_csv_filename) )
-    xxx += ".. csv-table::" + "\n"
-    xxx += "  :header-rows: 1\n"
-    xxx += "  :file:   #{_csv_filename}\n\n"
-    xxx += "\n"
-
-    subtitle = 'Source'
-    xxx += subtitle + "\n" + '-' * subtitle.size + "\n\n"
-    xxx += ".. code-block:: Ruby\n"
-    xxx += "  :linenos:\n"
-    xxx += "\n"
+    xxx += rst_csv_table(data, _csv_filename)
 
     # => ["name", "file", "line", "inherits", "docstring", "defaults", "source"]
     # TODO: should we do anythingspecial if there is no source?
 
-    xxx += data.fetch('source','').gsub(/^/m, '    ')
-    xxx += "\n\n"
-    puts xxx
+    if _source  = data.fetch('source',false)
+      xxx += rst_subtitle('Source')
+      xxx += ".. code-block:: Ruby\n"
+      xxx += "  :linenos:\n"
+      xxx += "\n"
+      xxx += _source.gsub(/^/m, '    ')
+      xxx += "\n"
+      puts xxx
+    end
+
+    xxx += "\n"
     puts
     File.open( out_path, 'w' ){|f| f.puts xxx }
   end
