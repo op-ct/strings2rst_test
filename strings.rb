@@ -7,10 +7,10 @@ require 'csv'
 
 
 metadata_json = File.join(@module_dir, 'metadata.json')
-if File.exists?(metadata_json) 
+if File.exists?(metadata_json)
   metadata = JSON.parse File.read(metadata_json)
 else
-  metadata = { 
+  metadata = {
     'name' => 'forgeorg-modulename',
     'author' => 'Author Name Goes Here',
   }
@@ -27,35 +27,52 @@ things = {}
 @module_name = metadata['name'].split(%r(-|/)).last
 @module_author = metadata['author']
 
-def cross_ref_name( name )
-  "pupmod__#{@forge_org}_#{name}"
+def cross_ref_name( name, strings_type )
+  "pupmod__#{@forge_org}_#{strings_type}_#{name}"
+end
+
+
+def record_csv(name, strings_type, _csv_data)
+  _csv_filename = File.join(@data_source_path,cross_ref_name(name,strings_type).gsub(':','_'))+'.csv'
+  FileUtils.mkdir_p(File.dirname(_csv_filename))
+  File.open(_csv_filename,'w') do |f|
+    _csv_data.each do |row|
+      f.puts row.to_csv
+    end
+  end
+  _csv_filename
 end
 
 strings_types_map = {
   'puppet_classes' => 'class',
   'defined_types'  => 'defined type',
+  'resource_types'  => 'resource',
+  'providers'  => 'provider',
+  'puppet_functions'  => 'function',
 }
 
 FileUtils.rm_rf 'doc'
 
+@root_doc_source_path = File.join('doc', 'source')
+@static_source_path   = File.join(@root_doc_source_path, '_static')
+@data_source_path     = File.join(@root_doc_source_path, '_data')
+@conf_py_path         = File.join(@root_doc_source_path, 'conf.py')
+
+
 # write conf.py
 # This needs to be written each time in order to embed metadata about the
 # proejct into the conf.py
-root_doc_source_path = File.join('doc', 'source')
-
-out_path = File.join(root_doc_source_path, 'conf.py')
-FileUtils.mkdir_p File.dirname(out_path)
+FileUtils.mkdir_p File.dirname(@conf_py_path)
 conf_py_content = DATA.read
-conf_py_content.gsub('XXX',@module_name)
+conf_py_content.gsub('ZZZ',@module_name)
 conf_py_content.gsub('YYY',@module_author)
-File.open(out_path,'w'){ |f| f.puts conf_py_content }
+File.open(@conf_py_path,'w'){ |f| f.puts conf_py_content }
 
-data_path = File.join(root_doc_source_path, '_data')
-FileUtils.mkdir_p File.dirname(data_path)
+FileUtils.mkdir_p File.dirname(@static_source_path)
+FileUtils.mkdir_p @data_source_path
 
 # write others
-strings_types = ['puppet_classes','defined_types']
-strings_types.each do |strings_type|
+strings_types_map.keys.each do |strings_type|
 
   strings[strings_type].each do |data|
     out_path = File.join(
@@ -63,21 +80,21 @@ strings_types.each do |strings_type|
        'source',
        strings_type,
         data['file']
-          .sub(%r{^manifests/},'')
-          .sub(/\.pp/, '.rst')
+          .sub(%r{^(manifests|lib.*)/},'')
+          .sub(/\.(pp|rb)/, '.rst')
     )
     FileUtils.mkdir_p File.dirname(out_path)
 
     things[ strings_type ] ||= []
-    things[ strings_type ] << { :ref => cross_ref_name(data['name']), :path => out_path }
+    things[ strings_type ] << { :ref => cross_ref_name(data['name'], strings_type), :path => out_path }
     title = "#{strings_types_map.fetch(strings_type)}: #{data['name']}"
 
     xxx = ''
-    xxx += ".. _#{cross_ref_name(data['name'])}:\n\n"
+    xxx += ".. _#{cross_ref_name(data['name'], strings_type)}:\n\n"
 
     xxx += title + "\n" + '=' * title.size + "\n\n"
     if data.key? 'inherits'
-      target = cross_ref_name data['inherits']
+      target = cross_ref_name(data['inherits'],strings_type)
       xxx += ":Inherits:\n  #{data['inherits']}_\n"
     end
     xxx += ":File:\n  #{data['file']}\n"
@@ -89,7 +106,7 @@ strings_types.each do |strings_type|
     xxx += "\n"
     # chop off legacy rdoc
     _rdoc_sections = data['docstring']['text'].split(/^==/)
-    xxx += _rdoc_sections.first
+    xxx += _rdoc_sections.first unless _rdoc_sections.empty?
     xxx += "\n"
 
     if _rdoc_sections.size > 1
@@ -98,30 +115,40 @@ strings_types.each do |strings_type|
 
     _csv_parameter_data = []
     # FIXME: this skips parameters without defaults
-    subtitle = 'Parameters'
-    xxx += "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
 
-    data['docstring']['tags'].select{|x| x['tag_name'] == 'param' }.each do |tags|
-      row = [tags['name']]
-      row << tags['types'].join(', ')
-      row << ".. code-block:: Ruby\n\n    #{data['defaults'].fetch(tags['name'], nil)}"
-      row <<  tags['text']
-      _csv_parameter_data << row
-    end
-
-    _csv_filename = File.join(data_path,cross_ref_name(data['name']).gsub(':','_'))+'.csv'
-    FileUtils.mkdir_p File.dirname(_csv_filename)
-    File.open(_csv_filename,'w') do |f|
-      _csv_parameter_data.each do |row|
-        f.puts row.to_csv
+    if ['puppet_classes', 'defined_types'].include? strings_type
+      subtitle = 'Parameters'
+      xxx += "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
+      _csv_parameter_data << ['Parameter','Types','Default','Description']
+      data['docstring'].fetch('tags',[]).select{|x| x['tag_name'] == 'param' }.each do |tags|
+        row = [tags['name']]
+        row << tags['types'].join(', ')
+        row << ".. code-block:: Ruby\n\n    #{data['defaults'].fetch(tags['name'], nil)}"
+        row <<  tags['text']
+        _csv_parameter_data << row
       end
+###    else
+###      subtitle = 'Properties'
+###      xxx += "\n" + subtitle + "\n" + '-' * subtitle.size + "\n\n"
+###      data['properties'].each do |_data|
+###        row = [_data
+###        row << tags['types'].join(', ')
+###        row << ".. code-block:: Ruby\n\n    #{data['defaults'].fetch(tags['name'], nil)}"
+###        row <<  tags['text']
+###        _csv_parameter_data << row
+###
+###              require 'pry'; binding.pry unless strings_type == 'puppet_classes'
+###      end
     end
 
-    File.dirname(data['file']).split(File::SEPARATOR).size 
-    _csv_rel_path = "..#{File::SEPARATOR}" * File.dirname(data['file']).split(File::SEPARATOR).size
+    _csv_filename = record_csv(data['name'], strings_type, _csv_parameter_data)
+
+    File.dirname(data['file']).split(File::SEPARATOR).size
+    _dir_depth = File.dirname(data['file']).split(File::SEPARATOR).size
+    _csv_rel_path = "..#{File::SEPARATOR}" * _dir_depth
     _csv_filename = File.join( _csv_rel_path, '_data', File.basename(_csv_filename) )
-    xxx += ".. csv-table:: Parameters" + "\n"
-    xxx += '  :header: "Parameter","Types","Default","Description"' + "\n"
+    xxx += ".. csv-table::" + "\n"
+    xxx += "  :header-rows: 1\n"
     xxx += "  :file:   #{_csv_filename}\n\n"
     xxx += "\n"
 
@@ -132,7 +159,9 @@ strings_types.each do |strings_type|
     xxx += "\n"
 
     # => ["name", "file", "line", "inherits", "docstring", "defaults", "source"]
-    xxx += data['source'].gsub(/^/m, '    ')
+    # TODO: should we do anythingspecial if there is no source?
+
+    xxx += data.fetch('source','').gsub(/^/m, '    ')
     xxx += "\n\n"
     puts xxx
     puts
@@ -141,7 +170,7 @@ strings_types.each do |strings_type|
 end
 
 # write index.rst
-out_path = File.join(root_doc_source_path, 'index.rst')
+out_path = File.join(@root_doc_source_path, 'index.rst')
 FileUtils.mkdir_p File.dirname(out_path)
 xxx = ''
 things.each do |title, _things|
@@ -173,7 +202,7 @@ File.open( out_path, 'w' ){|f| f.puts(xxx); puts xxx }
 __END__
 # -*- coding: utf-8 -*-
 #
-# XXX documentation build configuration file, created by
+# ZZZ documentation build configuration file, created by
 # sphinx-quickstart on Sun Nov 20 16:59:21 2016.
 #
 # This file is execfile()d with the current directory set to its
@@ -217,7 +246,7 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'XXX'
+project = u'ZZZ'
 copyright = u'2016, YYY'
 author = u'YYY'
 
@@ -371,7 +400,7 @@ html_static_path = ['_static']
 #html_search_scorer = 'scorer.js'
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = 'XXXdoc'
+htmlhelp_basename = 'ZZZdoc'
 
 # -- Options for LaTeX output ---------------------------------------------
 
@@ -393,7 +422,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    (master_doc, 'XXX.tex', u'XXX Documentation',
+    (master_doc, 'ZZZ.tex', u'ZZZ Documentation',
      u'YYY', 'manual'),
 ]
 
@@ -423,7 +452,7 @@ latex_documents = [
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    (master_doc, 'xxx', u'XXX Documentation',
+    (master_doc, 'zzz', u'ZZZ Documentation',
      [author], 1)
 ]
 
@@ -437,8 +466,8 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    (master_doc, 'XXX', u'XXX Documentation',
-     author, 'XXX', 'One line description of project.',
+    (master_doc, 'ZZZ', u'ZZZ Documentation',
+     author, 'ZZZ', 'One line description of project.',
      'Miscellaneous'),
 ]
 
